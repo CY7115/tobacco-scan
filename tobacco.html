@@ -2,9 +2,10 @@
 <html lang="zh">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>烟叶扫码系统</title>
-    <script src="https://unpkg.com/html5-qrcode"></script>
+    <!-- 改用国内镜像，加载更快更稳 -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
     <script src="https://cdn.bmob.cn/sdk/Bmob-2.2.8.min.js"></script>
     <style>
         body { font-family: sans-serif; margin: 20px; background: #f5f5f5; }
@@ -16,11 +17,18 @@
         .role-btn { background: #1989fa; margin-right: 10px; }
         .info-card { background: #f9f9f9; padding: 15px; border-radius: 8px; margin: 15px 0; }
         .time { color: #888; font-size: 14px; }
+        .error-msg { color: red; font-weight: bold; display: none; padding: 15px; background: #ffe0e0; border-radius: 8px; margin: 10px 0; }
     </style>
 </head>
 <body>
 <div class="container">
     <h2>烟叶分级扫码系统</h2>
+
+    <!-- 加载失败提示 -->
+    <div id="loadError" class="error-msg">
+        ⚠️ 网络组件加载失败，请检查网络，然后刷新重试。
+    </div>
+
     <!-- 角色选择 -->
     <div id="roleSelection" class="role-select">
         <button class="role-btn" onclick="setRole('grader')">我是分级员（填写信息）</button>
@@ -61,24 +69,33 @@
     const BMOB_APP_ID = '052773d4fae66b95f49fc488f9965160';
     const BMOB_API_KEY = '1afe0f66b976a3aedc95db87194bc939';
     // =================================================
-    Bmob.initialize(BMOB_APP_ID, BMOB_API_KEY);
 
-    let currentRole = null;     // 'grader' 或 'checker'
+    // 1. 检查关键库是否加载成功
+    window.addEventListener('DOMContentLoaded', function() {
+        if (typeof Html5Qrcode === 'undefined' || typeof Bmob === 'undefined') {
+            document.getElementById('loadError').style.display = 'block';
+            // 隐藏功能按钮
+            document.getElementById('roleSelection').style.display = 'none';
+        } else {
+            // 初始化 Bmob
+            Bmob.initialize(BMOB_APP_ID, BMOB_API_KEY);
+        }
+    });
+
+    let currentRole = null;
     let currentQrCode = null;
     let html5QrCode = null;
-    let currentRecordId = null; // 用于仓管员确认时更新数据
-
-    // 页面元素
-    const roleSelection = document.getElementById('roleSelection');
-    const scannerSection = document.getElementById('scannerSection');
-    const graderForm = document.getElementById('graderForm');
-    const checkerPanel = document.getElementById('checkerPanel');
-    const readerDiv = document.getElementById('reader');
+    let currentRecordId = null;
 
     function setRole(role) {
+        // 检查库是否可用
+        if (typeof Html5Qrcode === 'undefined' || typeof Bmob === 'undefined') {
+            document.getElementById('loadError').style.display = 'block';
+            return;
+        }
         currentRole = role;
-        roleSelection.style.display = 'none';
-        scannerSection.style.display = 'block';
+        document.getElementById('roleSelection').style.display = 'none';
+        document.getElementById('scannerSection').style.display = 'block';
         startScan();
     }
 
@@ -87,27 +104,28 @@
         currentRole = null;
         currentQrCode = null;
         currentRecordId = null;
-        roleSelection.style.display = 'block';
-        scannerSection.style.display = 'none';
-        graderForm.style.display = 'none';
-        checkerPanel.style.display = 'none';
+        document.getElementById('roleSelection').style.display = 'block';
+        document.getElementById('scannerSection').style.display = 'none';
+        document.getElementById('graderForm').style.display = 'none';
+        document.getElementById('checkerPanel').style.display = 'none';
         document.getElementById('statusMsg').innerText = '';
     }
 
     function startScan() {
         html5QrCode = new Html5Qrcode("reader");
         html5QrCode.start(
-            { facingMode: "environment" }, // 后置摄像头
+            { facingMode: "environment" },
             { fps: 10, qrbox: { width: 250, height: 250 } },
             (decodedText) => {
-                // 扫码成功
                 currentQrCode = decodedText;
                 stopScan();
                 handleScannedCode(decodedText);
             },
-            (errorMessage) => { /* 忽略扫描错误 */ }
+            (errorMessage) => { /* 忽略扫描时的持续报错 */ }
         ).catch(err => {
-            document.getElementById('statusMsg').innerText = '摄像头启动失败，请检查权限或使用HTTPS链接';
+            document.getElementById('statusMsg').innerText = '摄像头启动失败：' + err.message;
+            // 恢复界面
+            resetToRole();
         });
     }
 
@@ -119,7 +137,7 @@
     }
 
     function handleScannedCode(qrText) {
-        scannerSection.style.display = 'none';
+        document.getElementById('scannerSection').style.display = 'none';
         if (currentRole === 'grader') {
             showGraderForm(qrText);
         } else if (currentRole === 'checker') {
@@ -127,13 +145,11 @@
         }
     }
 
-    // ---------- 分级员逻辑 ----------
     function showGraderForm(qrText) {
         document.getElementById('formQrCode').innerText = qrText;
-        // 自动填当前时间
         const now = new Date();
         document.getElementById('currentTime').innerText = now.toLocaleString();
-        graderForm.style.display = 'block';
+        document.getElementById('graderForm').style.display = 'block';
     }
 
     function submitGraderInfo() {
@@ -144,9 +160,7 @@
             return;
         }
         const now = new Date();
-        const recordTime = now.toISOString(); // 标准时间字符串
-
-        // 保存到 Bmob
+        const recordTime = now.toISOString();
         const TobaccoRecord = Bmob.Object.extend("TobaccoRecord");
         const record = new TobaccoRecord();
         record.set("qrCode", currentQrCode);
@@ -157,7 +171,7 @@
         record.save(null, {
             success: (result) => {
                 document.getElementById('statusMsg').innerText = '✅ 信息保存成功！';
-                graderForm.style.display = 'none';
+                document.getElementById('graderForm').style.display = 'none';
                 resetToRole();
             },
             error: (result, error) => {
@@ -166,7 +180,6 @@
         });
     }
 
-    // ---------- 仓管员逻辑 ----------
     function loadRecordForChecker(qrText) {
         const query = new Bmob.Query("TobaccoRecord");
         query.equalTo("qrCode", "==", qrText);
@@ -190,7 +203,7 @@
                         <p><strong>状态：</strong>${obj.get("confirmed") ? '已确认' : '待确认'}</p>
                     `;
                 }
-                checkerPanel.style.display = 'block';
+                document.getElementById('checkerPanel').style.display = 'block';
             },
             error: (error) => {
                 alert('查询失败：' + error.message);
@@ -203,14 +216,12 @@
             alert('没有可确认的记录');
             return;
         }
-        // 更新confirmed字段
         const query = new Bmob.Query("TobaccoRecord");
         query.get(currentRecordId, {
             success: (record) => {
                 record.set("confirmed", true);
                 record.save(null, {
                     success: (result) => {
-                        // 语音播报
                         const level = result.get("level");
                         const weight = result.get("weight");
                         const time = new Date(result.get("recordTime")).toLocaleString();
@@ -230,10 +241,10 @@
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = 'zh-CN';
             utterance.rate = 1.0;
-            window.speechSynthesis.cancel(); // 防止重叠
+            window.speechSynthesis.cancel();
             window.speechSynthesis.speak(utterance);
         } else {
-            alert('您的浏览器不支持语音播报，请尝试使用Chrome或Edge');
+            alert('您的浏览器不支持语音播报，请使用Chrome或Edge');
         }
     }
 </script>
